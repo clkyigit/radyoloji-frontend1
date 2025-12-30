@@ -8,14 +8,14 @@ import {
 } from 'lucide-react';
 
 // --- ENTEGRASYON KÜTÜPHANELERİ ---
-// Eğer supabaseClient.js dosyan yoksa src içine oluşturman gerekir.
+// supabaseClient.js dosyasının src içinde olduğundan emin ol
 import { supabase } from './supabaseClient'; 
 import { gapi } from 'gapi-script';
 
 // --- AYARLAR ---
 const APP_CONFIG = {
-  useSupabase: true, // Supabase Veritabanı
-  useGoogleCalendar: true // Google Takvim
+  useSupabase: true, // EVET: Ortak veritabanı açık
+  useGoogleCalendar: true // EVET: Takvim senkronizasyonu açık
 };
 
 // --- GOOGLE CALENDAR AYARLARI ---
@@ -56,7 +56,7 @@ const addEventToGoogleCalendar = async (appointment) => {
   }
 };
 
-// --- BAŞLANGIÇ VERİLERİ ---
+// --- BAŞLANGIÇ VERİLERİ (Yedekler) ---
 const initialProcedures = {
   "I. Tanısal Girişimsel Radyoloji": [
     { name: "Diagnostik anjiyografi", duration: 45 },
@@ -121,7 +121,6 @@ const LoginScreen = ({ onLogin, error }) => {
           <div className="absolute top-0 left-0 w-full h-full bg-blue-600 opacity-10 rounded-b-[50%] transform scale-150 -translate-y-20"></div>
           <div className="relative z-10">
             <div className="bg-white w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6 shadow-xl p-3">
-               {/* Logo yoksa placeholder gösterir */}
                <img src="/logo.png" alt="Logo" className="w-full h-full object-contain" onError={(e) => {e.target.onerror = null; e.target.src="https://via.placeholder.com/150?text=LOGO"}} />
             </div>
             <h1 className="text-2xl font-bold text-white tracking-tight">İzmir Şehir Hastanesi</h1>
@@ -187,12 +186,23 @@ const AppointmentModal = ({ isOpen, onClose, onSubmit, data, onChange, onCheckli
 
 // --- ANA UYGULAMA BİLEŞENİ ---
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(null); 
+  // GÜNCELLEME: Session Persistence (Yenileyince Giriş Gitmez)
+  // LocalStorage'dan "currentUser" anahtarını okuyoruz.
+  const [currentUser, setCurrentUser] = useState(() => {
+    if (typeof localStorage === 'undefined') return null;
+    const savedUser = localStorage.getItem('currentUser');
+    try {
+        return savedUser ? JSON.parse(savedUser) : null;
+    } catch (e) {
+        return null;
+    }
+  });
+  
   const [loginError, setLoginError] = useState("");
   const [gapiInited, setGapiInited] = useState(false);
   const [dbStatus, setDbStatus] = useState("Bağlanıyor...");
 
-  // --- LOCAL STORAGE & STATE (KALICI AYARLAR) ---
+  // --- LOCAL STORAGE (AYARLAR İÇİN) ---
   const [systemSettings, setSystemSettings] = useState(() => {
     if (typeof localStorage === 'undefined') return defaultSettings;
     const saved = localStorage.getItem('systemSettings');
@@ -220,19 +230,14 @@ export default function App() {
     ];
   });
   
-  // Randevuları LocalStorage'dan yükle (Yedek)
-  const [appointments, setAppointments] = useState(() => {
-    if (typeof localStorage === 'undefined') return [];
-    const saved = localStorage.getItem('appointments');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // Randevuları State'te tut (Veriler Supabase'den gelecek)
+  const [appointments, setAppointments] = useState([]);
 
-  // Local Storage Kayıt
+  // Local Storage Kayıt (Sadece ayarlar ve kullanıcı listesi için)
   useEffect(() => localStorage.setItem('systemSettings', JSON.stringify(systemSettings)), [systemSettings]);
   useEffect(() => localStorage.setItem('usersList', JSON.stringify(usersList)), [usersList]);
   useEffect(() => localStorage.setItem('proceduresData', JSON.stringify(proceduresData)), [proceduresData]);
   useEffect(() => localStorage.setItem('rooms', JSON.stringify(rooms)), [rooms]);
-  useEffect(() => localStorage.setItem('appointments', JSON.stringify(appointments)), [appointments]);
 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [currentDate, setCurrentDate] = useState(new Date()); 
@@ -272,7 +277,7 @@ export default function App() {
             setDbStatus("Veritabanı Hatası");
         } else {
             setAppointments(data || []);
-            setDbStatus("Çevrimiçi");
+            setDbStatus("Çevrimiçi (Supabase)");
         }
       } catch (error) {
         console.error("Beklenmeyen Hata:", error);
@@ -311,11 +316,26 @@ export default function App() {
     patientId: "", patientName: "", tc: "", procedure: "", room: rooms[0].name, date: "", notes: "", checklist: [], anesthesia: false
   });
 
+  // GÜNCELLEME: Login yapınca kullanıcıyı LocalStorage'a kaydet
   const handleLogin = (username, password) => {
     const user = usersList.find(u => u.username === username && u.password === password);
-    if (user) { setCurrentUser(user); setLoginError(""); } else { setLoginError("Hatalı kullanıcı adı veya şifre!"); }
+    if (user) { 
+        setCurrentUser(user); 
+        localStorage.setItem('currentUser', JSON.stringify(user)); 
+        setLoginError(""); 
+    } else { 
+        setLoginError("Hatalı kullanıcı adı veya şifre!"); 
+    }
   };
-  const handleLogout = () => { setCurrentUser(null); setLoginError(""); setActiveTab('dashboard'); };
+
+  // GÜNCELLEME: Logout yapınca LocalStorage'dan sil
+  const handleLogout = () => { 
+      setCurrentUser(null); 
+      localStorage.removeItem('currentUser');
+      setLoginError(""); 
+      setActiveTab('dashboard'); 
+  };
+
   const googleLogin = async () => {
     if (gapiInited) {
         const auth = gapi.auth2.getAuthInstance();
@@ -352,7 +372,7 @@ export default function App() {
   const handleChecklistChange = (item) => { setNewAppointment(prev => { const exists = prev.checklist.includes(item); return { ...prev, checklist: exists ? prev.checklist.filter(i => i !== item) : [...prev.checklist, item] }; }); };
   const handleToggleAnesthesia = () => setNewAppointment(prev => ({ ...prev, anesthesia: !prev.anesthesia }));
 
-  // --- SUBMIT HANDLER (SUPABASE) ---
+  // --- SUBMIT HANDLER (SUPABASE & GOOGLE CALENDAR) ---
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSyncing(true);
@@ -368,9 +388,11 @@ export default function App() {
     
     if(APP_CONFIG.useSupabase) {
         try { 
+            // Ortak veritabanına kayıt
             const { error } = await supabase.from('appointments').insert([appointmentData]);
             if (error) throw error;
 
+            // Google Takvim'e kayıt
             if (APP_CONFIG.useGoogleCalendar && gapiInited) {
                 const isSignedIn = gapi.auth2.getAuthInstance().isSignedIn.get();
                 if (!isSignedIn) await gapi.auth2.getAuthInstance().signIn();
@@ -385,6 +407,7 @@ export default function App() {
             alert("Kayıt sırasında hata oluştu: " + err.message);
         }
     } else {
+       // Yedek lokal mod
        setAppointments(prev => [...prev, {id: Date.now(), ...appointmentData}]);
        setShowModal(false);
     }
@@ -601,8 +624,73 @@ export default function App() {
           </div>
         )}
 
-        {/* --- ADMIN TAB --- */}
-        {activeTab === 'admin' && isAdmin && ( <div className="animate-fade-in space-y-8"><div className="bg-gradient-to-r from-slate-800 to-slate-900 rounded-2xl p-8 text-white shadow-xl flex items-center justify-between"><div><h2 className="text-2xl font-bold flex items-center gap-3"><Shield size={28}/> Yönetici Kontrol Paneli</h2><p className="text-slate-400 mt-2 text-sm max-w-lg">Sistem parametrelerini, kullanıcı yetkilerini, işlem listelerini ve cihaz durumlarını buradan yönetebilirsiniz.</p></div><Settings className="text-slate-700 opacity-50 hidden sm:block" size={80} /></div><div className="grid grid-cols-1 lg:grid-cols-3 gap-8"><div className="bg-white rounded-2xl shadow-md border border-gray-100 p-6 lg:col-span-3"><h3 className="font-bold text-gray-800 mb-6 border-b pb-4 flex items-center gap-2 text-lg"><ListPlus size={20} className="text-blue-600"/> Randevu Ekranı Konfigürasyonu</h3><div className="grid grid-cols-1 md:grid-cols-3 gap-8"><div className="space-y-4"><h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Görünürlük Ayarları</h4><div className="flex items-center justify-between bg-gray-50 p-4 rounded-xl border border-gray-100 transition-colors hover:bg-gray-100"><span className="text-sm font-medium text-gray-700">Hasta Protokol No</span><button onClick={() => toggleSetting('showProtocolNo')} className={`p-1 rounded-full transition-colors ${systemSettings.showProtocolNo ? 'text-green-600 bg-green-100' : 'text-gray-400 bg-gray-200'}`}>{systemSettings.showProtocolNo ? <ToggleRight size={28}/> : <ToggleLeft size={28}/>}</button></div><div className="flex items-center justify-between bg-gray-50 p-4 rounded-xl border border-gray-100 transition-colors hover:bg-gray-100"><span className="text-sm font-medium text-gray-700">Anestezi Seçeneği</span><button onClick={() => toggleSetting('showAnesthesia')} className={`p-1 rounded-full transition-colors ${systemSettings.showAnesthesia ? 'text-green-600 bg-green-100' : 'text-gray-400 bg-gray-200'}`}>{systemSettings.showAnesthesia ? <ToggleRight size={28}/> : <ToggleLeft size={28}/>}</button></div><div className="flex items-center justify-between bg-gray-50 p-4 rounded-xl border border-gray-100 transition-colors hover:bg-gray-100"><span className="text-sm font-medium text-gray-700">Güvenlik Listesi</span><button onClick={() => toggleSetting('showChecklist')} className={`p-1 rounded-full transition-colors ${systemSettings.showChecklist ? 'text-green-600 bg-green-100' : 'text-gray-400 bg-gray-200'}`}>{systemSettings.showChecklist ? <ToggleRight size={28}/> : <ToggleLeft size={28}/>}</button></div></div><div className="md:col-span-2"><h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Checklist Düzenleyici</h4><div className="bg-gray-50 p-5 rounded-xl border border-gray-100 h-full"><form onSubmit={addChecklistItem} className="flex gap-3 mb-4"><input type="text" placeholder="Yeni kontrol maddesi ekle..." className="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" value={newChecklistItem} onChange={(e) => setNewChecklistItem(e.target.value)}/><button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors shadow-sm">Ekle</button></form><div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-48 overflow-y-auto pr-2 custom-scrollbar">{systemSettings.checklistItems.map((item, idx) => (<div key={idx} className="flex justify-between items-center bg-white px-4 py-3 rounded-lg border border-gray-200 text-sm text-gray-700 group hover:border-gray-300 transition-colors"><span>{item}</span><button onClick={() => removeChecklistItem(item)} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all p-1 hover:bg-red-50 rounded"><MinusCircle size={16}/></button></div>))}</div></div></div></div></div><div className="bg-white rounded-2xl shadow-md border border-gray-100 p-6 md:col-span-2"><h3 className="font-bold text-gray-800 mb-6 border-b pb-4 flex items-center gap-2 text-lg"><Activity size={20} className="text-blue-600"/> Girişimsel İşlem Listesi Yönetimi</h3><form onSubmit={handleAddProcedure} className="flex flex-col sm:flex-row gap-4 mb-6 bg-slate-50 p-5 rounded-xl border border-slate-100"><div className="flex-[2]"><label className="block text-xs font-bold text-gray-500 uppercase mb-1.5">Yeni İşlem Adı</label><input type="text" required placeholder="Örn: Splenik arter embolizasyonu" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" value={newProcedureName} onChange={(e) => setNewProcedureName(e.target.value)}/></div><div className="flex-1"><label className="block text-xs font-bold text-gray-500 uppercase mb-1.5">Süre (dk)</label><input type="number" required min="1" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" value={newProcedureDuration} onChange={(e) => setNewProcedureDuration(e.target.value)}/></div><div className="flex-1"><label className="block text-xs font-bold text-gray-500 uppercase mb-1.5">Kategori</label><select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white" value={targetCategory} onChange={(e) => setTargetCategory(e.target.value)}>{Object.keys(proceduresData).map(cat => <option key={cat} value={cat}>{cat}</option>)}</select></div><button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm font-bold flex items-center justify-center gap-2 mt-auto h-[42px] transition-colors shadow-sm"><Plus size={18}/> Ekle</button></form><div className="grid grid-cols-1 md:grid-cols-2 gap-6">{Object.entries(proceduresData).map(([category, items]) => (<div key={category} className="border border-gray-200 rounded-xl overflow-hidden bg-white shadow-sm"><div className="bg-slate-100 px-4 py-3 font-bold text-xs text-slate-700 uppercase border-b border-gray-200">{category}</div><div className="max-h-80 overflow-y-auto p-2 space-y-1 custom-scrollbar">{items.map((proc, idx) => (<div key={idx} className="flex justify-between items-center hover:bg-slate-50 p-2.5 rounded-lg text-sm text-gray-700 border border-transparent hover:border-slate-200 transition-all group"><span className="flex-1 font-medium">{proc.name}</span><div className="flex items-center gap-3"><div className="flex items-center gap-1 bg-white px-2 py-1 rounded border border-gray-200 text-xs text-gray-500"><Clock size={12}/><input type="number" className="w-8 bg-transparent outline-none text-right font-bold text-gray-700" value={proc.duration} onChange={(e) => handleUpdateDuration(category, proc.name, e.target.value)}/> dk</div><button onClick={() => handleRemoveProcedure(category, proc.name)} className="text-gray-300 hover:text-red-500 transition opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 rounded-lg" title="Listeden Çıkar"><MinusCircle size={16}/></button></div></div>))}</div></div>))}</div></div><div className="flex flex-col gap-8"><div className="bg-white rounded-2xl shadow-md border border-gray-100 p-6"><h3 className="font-bold text-gray-800 mb-6 border-b pb-4 flex items-center gap-2 text-lg"><Users size={20} className="text-green-600"/> Personel Yönetimi</h3><form onSubmit={handleAddUser} className="mb-6 space-y-4 bg-green-50/50 p-5 rounded-xl border border-green-100"><h4 className="text-xs font-bold text-green-800 uppercase mb-2">Yeni Kullanıcı Oluştur</h4><div className="space-y-3"><div><input type="text" placeholder="Ad Soyad" required className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500 bg-white" value={newUser.name} onChange={(e) => setNewUser({...newUser, name: e.target.value})}/></div><div className="grid grid-cols-2 gap-3"><input type="text" placeholder="Kullanıcı Adı" required className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500 bg-white" value={newUser.username} onChange={(e) => setNewUser({...newUser, username: e.target.value})}/><input type="text" placeholder="Şifre" required className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500 bg-white" value={newUser.password} onChange={(e) => setNewUser({...newUser, password: e.target.value})}/></div><div className="flex gap-3"><select className="flex-1 border border-gray-300 rounded-lg px-3 py-2.5 text-sm outline-none bg-white" value={newUser.role} onChange={(e) => setNewUser({...newUser, role: e.target.value})}><option value="Girişimsel Radyolog">Girişimsel Radyolog</option><option value="Anjiyo Hemşiresi">Anjiyo Hemşiresi</option><option value="Radyoloji Teknisyeni">Radyoloji Teknisyeni</option></select><button type="submit" className="bg-green-600 text-white px-4 py-2.5 rounded-lg hover:bg-green-700 text-sm font-bold shadow-sm transition-colors">Oluştur</button></div></div></form><div className="max-h-64 overflow-y-auto space-y-2 pr-2 custom-scrollbar">{usersList.map((user) => (<div key={user.id} className="flex justify-between items-center bg-white p-3 rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-all"><div className="flex flex-col"><span className="font-bold text-gray-800 text-sm">{user.name}</span><span className="text-xs text-gray-500">{user.role}</span><span className="text-[10px] text-gray-400 mt-0.5 bg-gray-50 px-1 rounded w-fit">@{user.username}</span></div><div className="flex items-center gap-2"><span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-2 py-1 rounded font-bold border border-slate-200">{user.short}</span></div></div>))}</div></div><div className="bg-white rounded-2xl shadow-md border border-gray-100 p-6"><h3 className="font-bold text-gray-800 mb-6 border-b pb-4 flex items-center gap-2 text-lg"><MonitorPlay size={20} className="text-orange-600"/> Cihaz Kontrolü</h3><div className="flex flex-col gap-4">{rooms.map(room => (<div key={room.id} className="flex items-center justify-between p-4 border border-gray-200 rounded-xl bg-gray-50 hover:bg-white hover:shadow-sm transition-all"><div className="flex items-center gap-3"><div className={`p-2.5 rounded-full ${room.status === 'Aktif' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}><Activity size={20} /></div><div><p className="font-bold text-gray-800 text-sm">{room.name}</p><p className="text-xs text-gray-500 mt-0.5">Durum: <span className="font-semibold">{room.status}</span></p></div></div><button onClick={() => toggleRoomStatus(room.id)} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase transition-all shadow-sm ${room.status === 'Aktif' ? 'bg-white border border-red-200 text-red-600 hover:bg-red-50' : 'bg-green-600 text-white hover:bg-green-700'}`}>{room.status === 'Aktif' ? 'Bakıma Al' : 'Aktifleştir'}</button></div>))}</div></div></div></div></div>)}
+        {/* --- ADMIN TAB (FULL SÜRÜM - TEKRAR EKLENDİ) --- */}
+        {activeTab === 'admin' && isAdmin && (
+          <div className="animate-fade-in space-y-8">
+            <div className="bg-gradient-to-r from-slate-800 to-slate-900 rounded-2xl p-8 text-white shadow-xl flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold flex items-center gap-3"><Shield size={28}/> Yönetici Kontrol Paneli</h2>
+                <p className="text-slate-400 mt-2 text-sm max-w-lg">Sistem parametrelerini, kullanıcı yetkilerini, işlem listelerini ve cihaz durumlarını buradan yönetebilirsiniz.</p>
+              </div>
+              <Settings className="text-slate-700 opacity-50 hidden sm:block" size={80} />
+            </div>
+            
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              {/* 1. AYARLAR & CHECKLIST */}
+              <div className="bg-white rounded-2xl shadow-md border border-gray-100 p-6 lg:col-span-3">
+                <h3 className="font-bold text-gray-800 mb-6 border-b pb-4 flex items-center gap-2 text-lg"><ListPlus size={20} className="text-blue-600"/> Randevu Ekranı Konfigürasyonu</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                  <div className="space-y-4">
+                    <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Görünürlük Ayarları</h4>
+                    <div className="flex items-center justify-between bg-gray-50 p-4 rounded-xl border border-gray-100 transition-colors hover:bg-gray-100"><span className="text-sm font-medium text-gray-700">Hasta Protokol No</span><button onClick={() => toggleSetting('showProtocolNo')} className={`p-1 rounded-full transition-colors ${systemSettings.showProtocolNo ? 'text-green-600 bg-green-100' : 'text-gray-400 bg-gray-200'}`}>{systemSettings.showProtocolNo ? <ToggleRight size={28}/> : <ToggleLeft size={28}/>}</button></div>
+                    <div className="flex items-center justify-between bg-gray-50 p-4 rounded-xl border border-gray-100 transition-colors hover:bg-gray-100"><span className="text-sm font-medium text-gray-700">Anestezi Seçeneği</span><button onClick={() => toggleSetting('showAnesthesia')} className={`p-1 rounded-full transition-colors ${systemSettings.showAnesthesia ? 'text-green-600 bg-green-100' : 'text-gray-400 bg-gray-200'}`}>{systemSettings.showAnesthesia ? <ToggleRight size={28}/> : <ToggleLeft size={28}/>}</button></div>
+                    <div className="flex items-center justify-between bg-gray-50 p-4 rounded-xl border border-gray-100 transition-colors hover:bg-gray-100"><span className="text-sm font-medium text-gray-700">Güvenlik Listesi</span><button onClick={() => toggleSetting('showChecklist')} className={`p-1 rounded-full transition-colors ${systemSettings.showChecklist ? 'text-green-600 bg-green-100' : 'text-gray-400 bg-gray-200'}`}>{systemSettings.showChecklist ? <ToggleRight size={28}/> : <ToggleLeft size={28}/>}</button></div>
+                  </div>
+                  <div className="md:col-span-2">
+                    <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Checklist Düzenleyici</h4>
+                    <div className="bg-gray-50 p-5 rounded-xl border border-gray-100 h-full">
+                      <form onSubmit={addChecklistItem} className="flex gap-3 mb-4"><input type="text" placeholder="Yeni kontrol maddesi ekle..." className="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" value={newChecklistItem} onChange={(e) => setNewChecklistItem(e.target.value)}/><button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors shadow-sm">Ekle</button></form>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-48 overflow-y-auto pr-2 custom-scrollbar">{systemSettings.checklistItems.map((item, idx) => (<div key={idx} className="flex justify-between items-center bg-white px-4 py-3 rounded-lg border border-gray-200 text-sm text-gray-700 group hover:border-gray-300 transition-colors"><span>{item}</span><button onClick={() => removeChecklistItem(item)} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all p-1 hover:bg-red-50 rounded"><MinusCircle size={16}/></button></div>))}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. PROSEDÜR YÖNETİMİ */}
+              <div className="bg-white rounded-2xl shadow-md border border-gray-100 p-6 md:col-span-2">
+                <h3 className="font-bold text-gray-800 mb-6 border-b pb-4 flex items-center gap-2 text-lg"><Activity size={20} className="text-blue-600"/> Girişimsel İşlem Listesi Yönetimi</h3>
+                <form onSubmit={handleAddProcedure} className="flex flex-col sm:flex-row gap-4 mb-6 bg-slate-50 p-5 rounded-xl border border-slate-100">
+                  <div className="flex-[2]"><label className="block text-xs font-bold text-gray-500 uppercase mb-1.5">Yeni İşlem Adı</label><input type="text" required placeholder="Örn: Splenik arter embolizasyonu" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" value={newProcedureName} onChange={(e) => setNewProcedureName(e.target.value)}/></div>
+                  <div className="flex-1"><label className="block text-xs font-bold text-gray-500 uppercase mb-1.5">Süre (dk)</label><input type="number" required min="1" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" value={newProcedureDuration} onChange={(e) => setNewProcedureDuration(e.target.value)}/></div>
+                  <div className="flex-1"><label className="block text-xs font-bold text-gray-500 uppercase mb-1.5">Kategori</label><select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white" value={targetCategory} onChange={(e) => setTargetCategory(e.target.value)}>{Object.keys(proceduresData).map(cat => <option key={cat} value={cat}>{cat}</option>)}</select></div>
+                  <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm font-bold flex items-center justify-center gap-2 mt-auto h-[42px] transition-colors shadow-sm"><Plus size={18}/> Ekle</button>
+                </form>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">{Object.entries(proceduresData).map(([category, items]) => (<div key={category} className="border border-gray-200 rounded-xl overflow-hidden bg-white shadow-sm"><div className="bg-slate-100 px-4 py-3 font-bold text-xs text-slate-700 uppercase border-b border-gray-200">{category}</div><div className="max-h-80 overflow-y-auto p-2 space-y-1 custom-scrollbar">{items.map((proc, idx) => (<div key={idx} className="flex justify-between items-center hover:bg-slate-50 p-2.5 rounded-lg text-sm text-gray-700 border border-transparent hover:border-slate-200 transition-all group"><span className="flex-1 font-medium">{proc.name}</span><div className="flex items-center gap-3"><div className="flex items-center gap-1 bg-white px-2 py-1 rounded border border-gray-200 text-xs text-gray-500"><Clock size={12}/><input type="number" className="w-8 bg-transparent outline-none text-right font-bold text-gray-700" value={proc.duration} onChange={(e) => handleUpdateDuration(category, proc.name, e.target.value)}/> dk</div><button onClick={() => handleRemoveProcedure(category, proc.name)} className="text-gray-300 hover:text-red-500 transition opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 rounded-lg" title="Listeden Çıkar"><MinusCircle size={16}/></button></div></div>))}</div></div>))}</div>
+              </div>
+
+              {/* 3. PERSONEL & CİHAZ YÖNETİMİ */}
+              <div className="flex flex-col gap-8">
+                <div className="bg-white rounded-2xl shadow-md border border-gray-100 p-6">
+                  <h3 className="font-bold text-gray-800 mb-6 border-b pb-4 flex items-center gap-2 text-lg"><Users size={20} className="text-green-600"/> Personel Yönetimi</h3>
+                  <form onSubmit={handleAddUser} className="mb-6 space-y-4 bg-green-50/50 p-5 rounded-xl border border-green-100">
+                    <h4 className="text-xs font-bold text-green-800 uppercase mb-2">Yeni Kullanıcı Oluştur</h4>
+                    <div className="space-y-3">
+                      <div><input type="text" placeholder="Ad Soyad" required className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500 bg-white" value={newUser.name} onChange={(e) => setNewUser({...newUser, name: e.target.value})}/></div>
+                      <div className="grid grid-cols-2 gap-3"><input type="text" placeholder="Kullanıcı Adı" required className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500 bg-white" value={newUser.username} onChange={(e) => setNewUser({...newUser, username: e.target.value})}/><input type="text" placeholder="Şifre" required className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500 bg-white" value={newUser.password} onChange={(e) => setNewUser({...newUser, password: e.target.value})}/></div>
+                      <div className="flex gap-3"><select className="flex-1 border border-gray-300 rounded-lg px-3 py-2.5 text-sm outline-none bg-white" value={newUser.role} onChange={(e) => setNewUser({...newUser, role: e.target.value})}><option value="Girişimsel Radyolog">Girişimsel Radyolog</option><option value="Anjiyo Hemşiresi">Anjiyo Hemşiresi</option><option value="Radyoloji Teknisyeni">Radyoloji Teknisyeni</option></select><button type="submit" className="bg-green-600 text-white px-4 py-2.5 rounded-lg hover:bg-green-700 text-sm font-bold shadow-sm transition-colors">Oluştur</button></div>
+                    </div>
+                  </form>
+                  <div className="max-h-64 overflow-y-auto space-y-2 pr-2 custom-scrollbar">{usersList.map((user) => (<div key={user.id} className="flex justify-between items-center bg-white p-3 rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-all"><div className="flex flex-col"><span className="font-bold text-gray-800 text-sm">{user.name}</span><span className="text-xs text-gray-500">{user.role}</span><span className="text-[10px] text-gray-400 mt-0.5 bg-gray-50 px-1 rounded w-fit">@{user.username}</span></div><div className="flex items-center gap-2"><span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-2 py-1 rounded font-bold border border-slate-200">{user.short}</span></div></div>))}</div>
+                </div>
+                
+                <div className="bg-white rounded-2xl shadow-md border border-gray-100 p-6">
+                  <h3 className="font-bold text-gray-800 mb-6 border-b pb-4 flex items-center gap-2 text-lg"><MonitorPlay size={20} className="text-orange-600"/> Cihaz Kontrolü</h3>
+                  <div className="flex flex-col gap-4">{rooms.map(room => (<div key={room.id} className="flex items-center justify-between p-4 border border-gray-200 rounded-xl bg-gray-50 hover:bg-white hover:shadow-sm transition-all"><div className="flex items-center gap-3"><div className={`p-2.5 rounded-full ${room.status === 'Aktif' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}><Activity size={20} /></div><div><p className="font-bold text-gray-800 text-sm">{room.name}</p><p className="text-xs text-gray-500 mt-0.5">Durum: <span className="font-semibold">{room.status}</span></p></div></div><button onClick={() => toggleRoomStatus(room.id)} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase transition-all shadow-sm ${room.status === 'Aktif' ? 'bg-white border border-red-200 text-red-600 hover:bg-red-50' : 'bg-green-600 text-white hover:bg-green-700'}`}>{room.status === 'Aktif' ? 'Bakıma Al' : 'Aktifleştir'}</button></div>))}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
 
       <AppointmentModal 
