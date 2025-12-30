@@ -7,18 +7,15 @@ import {
   ToggleLeft, ToggleRight, ListPlus, Cloud, UserCog, Database, Wifi, WifiOff
 } from 'lucide-react';
 
-// --- ENTEGRASYON KÜTÜPHANELERİ ---
-// supabaseClient.js dosyasının src içinde olduğundan emin ol
 import { supabase } from './supabaseClient'; 
 import { gapi } from 'gapi-script';
 
 // --- AYARLAR ---
 const APP_CONFIG = {
-  useSupabase: true, // EVET: Ortak veritabanı açık
-  useGoogleCalendar: true // EVET: Takvim senkronizasyonu açık
+  useSupabase: true, 
+  useGoogleCalendar: true 
 };
 
-// --- GOOGLE CALENDAR AYARLARI ---
 const CALENDAR_CONFIG = {
   clientId: process.env.REACT_APP_GOOGLE_CLIENT_ID,
   apiKey: process.env.REACT_APP_GOOGLE_API_KEY,
@@ -34,7 +31,6 @@ const formatDate = (dateStr) => {
   return `${parts[2]}.${parts[1]}.${parts[0]}`;
 };
 
-// --- GOOGLE CALENDAR İŞLEVİ ---
 const addEventToGoogleCalendar = async (appointment) => {
   if (!gapi.client) return false;
   
@@ -56,7 +52,6 @@ const addEventToGoogleCalendar = async (appointment) => {
   }
 };
 
-// --- BAŞLANGIÇ VERİLERİ (Yedekler) ---
 const initialProcedures = {
   "I. Tanısal Girişimsel Radyoloji": [
     { name: "Diagnostik anjiyografi", duration: 45 },
@@ -90,24 +85,16 @@ const initialProcedures = {
   ]
 };
 
-const defaultUsers = [
-  { id: 1, name: "Dr. Ümit Belet", username: "umit.belet", password: "ub5337693672", role: "Girişimsel Radyolog", short: "DR" },
-  { id: 2, name: "Hem. Ayşe Demir", username: "hemsire", password: "123", role: "Anjiyo Hemşiresi", short: "HE" },
-  { id: 3, name: "Tek. Mehmet Can", username: "tek", password: "123", role: "Radyoloji Teknisyeni", short: "TE" }
+// Varsayılan kullanıcılar (Veritabanı boşsa devreye girer)
+const fallbackUsers = [
+  { id: 1, name: "Dr. Ümit Belet", username: "umit.belet", password: "ub5337693672", role: "Girişimsel Radyolog", short: "DR" }
 ];
 
 const defaultSettings = {
   showProtocolNo: true,
   showAnesthesia: true,
   showChecklist: true,
-  checklistItems: [
-    "Onam Formu İmzalandı mı?",
-    "Açlık Durumu Uygun mu?",
-    "Kreatinin / Böbrek Fonk. Kontrolü",
-    "INR / Kan Sulandırıcı Kontrolü",
-    "Kontrast Alerjisi Sorgulandı mı?",
-    "Eski Görüntüler İncelendi mi?"
-  ]
+  checklistItems: [ "Onam Formu İmzalandı mı?", "Açlık Durumu Uygun mu?", "Kreatinin / Böbrek Fonk. Kontrolü", "INR / Kan Sulandırıcı Kontrolü", "Kontrast Alerjisi Sorgulandı mı?", "Eski Görüntüler İncelendi mi?" ]
 };
 
 // --- BİLEŞENLER ---
@@ -186,8 +173,6 @@ const AppointmentModal = ({ isOpen, onClose, onSubmit, data, onChange, onCheckli
 
 // --- ANA UYGULAMA BİLEŞENİ ---
 export default function App() {
-  // GÜNCELLEME: Session Persistence (Yenileyince Giriş Gitmez)
-  // LocalStorage'dan "currentUser" anahtarını okuyoruz.
   const [currentUser, setCurrentUser] = useState(() => {
     if (typeof localStorage === 'undefined') return null;
     const savedUser = localStorage.getItem('currentUser');
@@ -202,17 +187,16 @@ export default function App() {
   const [gapiInited, setGapiInited] = useState(false);
   const [dbStatus, setDbStatus] = useState("Bağlanıyor...");
 
-  // --- LOCAL STORAGE (AYARLAR İÇİN) ---
+  // AYARLAR (Lokal)
   const [systemSettings, setSystemSettings] = useState(() => {
     if (typeof localStorage === 'undefined') return defaultSettings;
     const saved = localStorage.getItem('systemSettings');
     return saved ? JSON.parse(saved) : defaultSettings;
   });
-  const [usersList, setUsersList] = useState(() => {
-    if (typeof localStorage === 'undefined') return defaultUsers;
-    const saved = localStorage.getItem('usersList');
-    return saved ? JSON.parse(saved) : defaultUsers;
-  });
+  
+  // KULLANICI LİSTESİ (Artık State yerine veritabanından gelecek, ama başlangıç state'i lazım)
+  const [usersList, setUsersList] = useState([]);
+
   const [proceduresData, setProceduresData] = useState(() => {
     if (typeof localStorage === 'undefined') return initialProcedures;
     const saved = localStorage.getItem('proceduresData');
@@ -230,12 +214,9 @@ export default function App() {
     ];
   });
   
-  // Randevuları State'te tut (Veriler Supabase'den gelecek)
   const [appointments, setAppointments] = useState([]);
 
-  // Local Storage Kayıt (Sadece ayarlar ve kullanıcı listesi için)
   useEffect(() => localStorage.setItem('systemSettings', JSON.stringify(systemSettings)), [systemSettings]);
-  useEffect(() => localStorage.setItem('usersList', JSON.stringify(usersList)), [usersList]);
   useEffect(() => localStorage.setItem('proceduresData', JSON.stringify(proceduresData)), [proceduresData]);
   useEffect(() => localStorage.setItem('rooms', JSON.stringify(rooms)), [rooms]);
 
@@ -243,7 +224,7 @@ export default function App() {
   const [currentDate, setCurrentDate] = useState(new Date()); 
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
 
-  // --- GOOGLE CALENDAR INIT ---
+  // GOOGLE CALENDAR INIT
   useEffect(() => {
     const initClient = () => {
       gapi.client.init({
@@ -258,39 +239,54 @@ export default function App() {
     gapi.load('client:auth2', initClient);
   }, []);
 
-  // --- SUPABASE VERİ OKUMA VE REALTIME ---
+  // --- SUPABASE VERİ OKUMA (RANDEVULAR VE KULLANICILAR) ---
   useEffect(() => {
     if (!APP_CONFIG.useSupabase) {
       setDbStatus("Yerel Mod");
+      setUsersList(fallbackUsers);
       return;
     }
 
-    const fetchAppointments = async () => {
+    const fetchData = async () => {
       try {
-        const { data, error } = await supabase
+        // 1. Randevuları Çek
+        const { data: apps, error: appsError } = await supabase
           .from('appointments')
           .select('*')
           .order('created_at', { ascending: true });
         
-        if (error) {
-            console.error("Supabase Veri Çekme Hatası:", error);
-            setDbStatus("Veritabanı Hatası");
+        if (appsError) throw appsError;
+        setAppointments(apps || []);
+
+        // 2. Kullanıcıları Çek (YENİ ÖZELLİK)
+        const { data: users, error: usersError } = await supabase
+          .from('app_users') // Supabase'de oluşturduğun tablo adı
+          .select('*');
+        
+        if (usersError) {
+            console.error("Kullanıcı listesi çekilemedi, varsayılanlar kullanılıyor.", usersError);
+            setUsersList(fallbackUsers);
         } else {
-            setAppointments(data || []);
-            setDbStatus("Çevrimiçi (Supabase)");
+            // Eğer veritabanı boşsa varsayılan kullanıcıyı göster
+            setUsersList(users && users.length > 0 ? users : fallbackUsers);
         }
+
+        setDbStatus("Çevrimiçi (Supabase)");
+
       } catch (error) {
-        console.error("Beklenmeyen Hata:", error);
-        setDbStatus("Bağlantı Hatası");
+        console.error("Veri Çekme Hatası:", error);
+        setDbStatus("Veritabanı Hatası");
+        setUsersList(fallbackUsers); // Hata durumunda kurtarıcı
       }
     };
     
-    fetchAppointments();
+    fetchData();
 
+    // Realtime (Sadece randevular için, kullanıcılar için refresh gerekir)
     const channel = supabase
       .channel('realtime appointments')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'appointments' }, () => {
-        fetchAppointments(); 
+        fetchData(); 
       })
       .subscribe();
 
@@ -316,8 +312,8 @@ export default function App() {
     patientId: "", patientName: "", tc: "", procedure: "", room: rooms[0].name, date: "", notes: "", checklist: [], anesthesia: false
   });
 
-  // GÜNCELLEME: Login yapınca kullanıcıyı LocalStorage'a kaydet
   const handleLogin = (username, password) => {
+    // Giriş kontrolünü artık veritabanından gelen liste ile yapıyoruz
     const user = usersList.find(u => u.username === username && u.password === password);
     if (user) { 
         setCurrentUser(user); 
@@ -328,7 +324,6 @@ export default function App() {
     }
   };
 
-  // GÜNCELLEME: Logout yapınca LocalStorage'dan sil
   const handleLogout = () => { 
       setCurrentUser(null); 
       localStorage.removeItem('currentUser');
@@ -338,9 +333,15 @@ export default function App() {
 
   const googleLogin = async () => {
     if (gapiInited) {
-        const auth = gapi.auth2.getAuthInstance();
-        await auth.signIn();
-        alert("Google ile giriş başarılı! Takvim senkronizasyonu aktif.");
+        try {
+            const auth = gapi.auth2.getAuthInstance();
+            await auth.signIn();
+            alert("Google ile giriş başarılı! Takvim senkronizasyonu aktif.");
+        } catch(e) {
+            alert("Google giriş hatası (Popup engellendi mi?)");
+        }
+    } else {
+        alert("Google servisi henüz hazır değil, lütfen sayfayı yenileyin.");
     }
   };
 
@@ -349,8 +350,7 @@ export default function App() {
   const isDoctor = currentUser.role === "Girişimsel Radyolog";
   const isAdmin = currentUser.username === "umit.belet"; 
 
-  // Handlers
-  const handleUpdatePassword = (e) => { e.preventDefault(); if (!newPassword) return; setUsersList(prev => prev.map(u => u.id === currentUser.id ? { ...u, password: newPassword } : u)); setCurrentUser(prev => ({ ...prev, password: newPassword })); alert("Şifreniz başarıyla güncellendi."); setNewPassword(""); };
+  // --- AYAR VE PROSEDÜR FONKSİYONLARI ---
   const toggleSetting = (key) => setSystemSettings(prev => ({ ...prev, [key]: !prev[key] }));
   const addChecklistItem = (e) => { e.preventDefault(); if (!newChecklistItem.trim()) return; setSystemSettings(prev => ({ ...prev, checklistItems: [...prev.checklistItems, newChecklistItem] })); setNewChecklistItem(""); };
   const removeChecklistItem = (itemToRemove) => { setSystemSettings(prev => ({ ...prev, checklistItems: prev.checklistItems.filter(item => item !== itemToRemove) })); };
@@ -358,21 +358,66 @@ export default function App() {
   const handleRemoveProcedure = (category, procName) => { if (window.confirm(`${procName} işlemini silmek istediğinize emin misiniz?`)) { setProceduresData(prev => ({ ...prev, [category]: prev[category].filter(p => p.name !== procName) })); } };
   const handleUpdateDuration = (category, procName, newDuration) => { setProceduresData(prev => ({ ...prev, [category]: prev[category].map(p => p.name === procName ? { ...p, duration: parseInt(newDuration) } : p) })); };
   
-  const handleAddUser = (e) => { 
+  // --- KULLANICI EKLEME (SUPABASE KAYDI) ---
+  const handleAddUser = async (e) => { 
       e.preventDefault(); 
       if(!newUser.name || !newUser.username || !newUser.password) return; 
+      
+      // Kullanıcı adı kontrolü
       if(usersList.some(u => u.username === newUser.username)) { alert("Kullanıcı adı kullanımda!"); return; } 
       
       const shortCode = newUser.role === "Anjiyo Hemşiresi" ? "HE" : "TE"; 
-      setUsersList([...usersList, { id: Date.now(), ...newUser, short: shortCode }]); 
+      const userPayload = { ...newUser, short: shortCode };
+
+      if (APP_CONFIG.useSupabase) {
+        try {
+            const { data, error } = await supabase.from('app_users').insert([userPayload]).select();
+            if (error) throw error;
+            // Başarılıysa listeyi güncelle
+            if(data) setUsersList([...usersList, data[0]]);
+            alert("Yeni personel veritabanına eklendi.");
+        } catch(err) {
+            console.error("Kullanıcı Ekleme Hatası:", err);
+            alert("Kullanıcı kaydedilemedi: " + err.message);
+            return;
+        }
+      } else {
+         // Local Mod
+         setUsersList([...usersList, { id: Date.now(), ...userPayload }]); 
+      }
+      
       setNewUser({ name: "", username: "", password: "", role: "Radyoloji Teknisyeni" }); 
   };
   
+  // Şifre Güncelleme (Supabase Destekli)
+  const handleUpdatePassword = async (e) => { 
+      e.preventDefault(); 
+      if (!newPassword) return; 
+      
+      if (APP_CONFIG.useSupabase) {
+          try {
+              const { error } = await supabase
+                .from('app_users')
+                .update({ password: newPassword })
+                .eq('id', currentUser.id); // ID üzerinden güncelleme
+              if(error) throw error;
+          } catch(err) {
+              console.error("Şifre Değiştirme Hatası:", err);
+              // Hata olsa bile local state'i güncelle ki kullanıcı takılmasın (Opsiyonel)
+          }
+      }
+
+      setUsersList(prev => prev.map(u => u.id === currentUser.id ? { ...u, password: newPassword } : u)); 
+      setCurrentUser(prev => ({ ...prev, password: newPassword })); 
+      alert("Şifreniz başarıyla güncellendi."); 
+      setNewPassword(""); 
+  };
+
   const handleInputChange = (e) => setNewAppointment(prev => ({ ...prev, [e.target.name]: e.target.value }));
   const handleChecklistChange = (item) => { setNewAppointment(prev => { const exists = prev.checklist.includes(item); return { ...prev, checklist: exists ? prev.checklist.filter(i => i !== item) : [...prev.checklist, item] }; }); };
   const handleToggleAnesthesia = () => setNewAppointment(prev => ({ ...prev, anesthesia: !prev.anesthesia }));
 
-  // --- SUBMIT HANDLER (SUPABASE & GOOGLE CALENDAR) ---
+  // --- GÜVENLİ SUBMIT HANDLER ---
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSyncing(true);
@@ -388,33 +433,41 @@ export default function App() {
     
     if(APP_CONFIG.useSupabase) {
         try { 
-            // Ortak veritabanına kayıt
+            // 1. ÖNCE SUPABASE'E KAYDET
             const { error } = await supabase.from('appointments').insert([appointmentData]);
             if (error) throw error;
 
-            // Google Takvim'e kayıt
+            // 2. SONRA GOOGLE TAKVİMİ DENE (Hata verirse işlemi bozma)
             if (APP_CONFIG.useGoogleCalendar && gapiInited) {
-                const isSignedIn = gapi.auth2.getAuthInstance().isSignedIn.get();
-                if (!isSignedIn) await gapi.auth2.getAuthInstance().signIn();
-                await addEventToGoogleCalendar(appointmentData);
+                try {
+                    const authInstance = gapi.auth2.getAuthInstance();
+                    if (authInstance && authInstance.isSignedIn.get()) {
+                        await addEventToGoogleCalendar(appointmentData);
+                    } else if (authInstance) {
+                         // Otomatik giriş popup'ı açılabilir ama tarayıcı engelleyebilir
+                         console.warn("Google girişi yapılmamış, takvim atlanıyor.");
+                    }
+                } catch (googleError) {
+                    console.error("Google Takvim Hatası (Kayıt devam ediyor):", googleError);
+                }
             }
 
             setShowModal(false);
             setNewAppointment({ patientId: "", patientName: "", tc: "", procedure: "", room: rooms[0].name, date: "", notes: "", checklist: [], anesthesia: false });
+            alert("Randevu başarıyla kaydedildi.");
 
         } catch(err) { 
-            console.error("Supabase Yazma Hatası:", err);
-            alert("Kayıt sırasında hata oluştu: " + err.message);
+            console.error("Supabase Kritik Hata:", err);
+            alert("Veritabanı kayıt hatası: " + err.message);
         }
     } else {
-       // Yedek lokal mod
        setAppointments(prev => [...prev, {id: Date.now(), ...appointmentData}]);
        setShowModal(false);
     }
     setIsSyncing(false);
   };
 
-  // --- DELETE HANDLER (SUPABASE) ---
+  // --- SİLME VE GÜNCELLEME İŞLEMLERİ ---
   const handleDelete = async (id) => { 
       if (!isDoctor) return; 
       if (window.confirm("Silmek istediğinize emin misiniz?")) {
@@ -429,7 +482,6 @@ export default function App() {
       }
   };
 
-  // --- UPDATE HANDLER (SUPABASE) ---
   const handleStatusChange = async (id, newStatus) => { 
       if (!isDoctor) return; 
       if(APP_CONFIG.useSupabase) {
@@ -444,6 +496,7 @@ export default function App() {
 
   const toggleRoomStatus = (id) => { if (!isAdmin) return; setRooms(prev => prev.map(room => room.id === id ? { ...room, status: room.status === "Aktif" ? "Bakımda" : "Aktif" } : room)); };
 
+  // --- LİSTELEME VE TAKVİM MANTIĞI ---
   const filteredAppointments = appointments.filter(app => {
     const term = searchTerm.toLowerCase();
     const matchGeneral = app.patientName.toLowerCase().includes(term) || app.tc.includes(term) || (app.patientId && app.patientId.includes(term)) || app.procedure.toLowerCase().includes(term);
@@ -567,7 +620,6 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-4">
-             {/* VERİTABANI DURUM GÖSTERGESİ */}
              <div className="flex items-center gap-2 px-3 py-1 rounded bg-slate-800 border border-slate-700 hidden sm:flex">
                {dbStatus.includes("Çevrimiçi") ? <Database size={14} className="text-green-500" /> : <WifiOff size={14} className="text-red-500 animate-pulse" />}
                <span className={`text-xs ${dbStatus.includes("Çevrimiçi") ? "text-green-500" : "text-red-500"}`}>{dbStatus}</span>
@@ -580,7 +632,6 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* NAVIGASYON */}
         <div className="mb-8 border-b border-gray-200 overflow-x-auto">
           <div className="flex gap-2 pb-1 min-w-max">
             {[ { id: 'dashboard', icon: LayoutDashboard, label: 'Genel Bakış' }, { id: 'calendar', icon: Calendar, label: 'Takvim & Ajanda' }, { id: 'appointments', icon: CalendarDays, label: 'Liste Görünümü' }, { id: 'settings', icon: UserCog, label: 'Ayarlar' }, ...(isAdmin ? [{ id: 'admin', icon: Settings, label: 'Yönetici Paneli' }] : []) ].map(tab => (
@@ -597,7 +648,6 @@ export default function App() {
                 <div className="text-center sm:text-left"><h2 className="text-3xl font-bold text-slate-800">{currentUser.name}</h2><p className="text-slate-500 font-medium text-lg">{currentUser.role}</p><p className="text-sm text-slate-400 mt-2 bg-slate-50 inline-block px-3 py-1 rounded-full border border-slate-100">Kullanıcı Adı: <span className="font-mono text-slate-600">{currentUser.username}</span></p></div>
              </div>
 
-             {/* GOOGLE TAKVİM ENTEGRASYON KARTI */}
              <div className="bg-white rounded-2xl shadow-md border border-gray-100 p-8">
                <h3 className="font-bold text-gray-800 mb-6 border-b pb-4 flex items-center gap-2"><Clock size={20} className="text-blue-600"/> Takvim Entegrasyonu</h3>
                <div className="bg-blue-50 p-6 rounded-xl border border-blue-100 flex justify-between items-center">
@@ -624,7 +674,7 @@ export default function App() {
           </div>
         )}
 
-        {/* --- ADMIN TAB (FULL SÜRÜM - TEKRAR EKLENDİ) --- */}
+        {/* --- ADMIN TAB --- */}
         {activeTab === 'admin' && isAdmin && (
           <div className="animate-fade-in space-y-8">
             <div className="bg-gradient-to-r from-slate-800 to-slate-900 rounded-2xl p-8 text-white shadow-xl flex items-center justify-between">
@@ -680,6 +730,7 @@ export default function App() {
                       <div className="flex gap-3"><select className="flex-1 border border-gray-300 rounded-lg px-3 py-2.5 text-sm outline-none bg-white" value={newUser.role} onChange={(e) => setNewUser({...newUser, role: e.target.value})}><option value="Girişimsel Radyolog">Girişimsel Radyolog</option><option value="Anjiyo Hemşiresi">Anjiyo Hemşiresi</option><option value="Radyoloji Teknisyeni">Radyoloji Teknisyeni</option></select><button type="submit" className="bg-green-600 text-white px-4 py-2.5 rounded-lg hover:bg-green-700 text-sm font-bold shadow-sm transition-colors">Oluştur</button></div>
                     </div>
                   </form>
+                  {/* Kullanıcı listesi de artık state'den geliyor */}
                   <div className="max-h-64 overflow-y-auto space-y-2 pr-2 custom-scrollbar">{usersList.map((user) => (<div key={user.id} className="flex justify-between items-center bg-white p-3 rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-all"><div className="flex flex-col"><span className="font-bold text-gray-800 text-sm">{user.name}</span><span className="text-xs text-gray-500">{user.role}</span><span className="text-[10px] text-gray-400 mt-0.5 bg-gray-50 px-1 rounded w-fit">@{user.username}</span></div><div className="flex items-center gap-2"><span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-2 py-1 rounded font-bold border border-slate-200">{user.short}</span></div></div>))}</div>
                 </div>
                 
