@@ -16,6 +16,7 @@ const APP_CONFIG = {
   useGoogleCalendar: true 
 };
 
+// Google Client Config (Sadece Client-side Auth için kalabilir, işlem Backend'de yapılıyor)
 const CALENDAR_CONFIG = {
   clientId: process.env.REACT_APP_GOOGLE_CLIENT_ID,
   apiKey: process.env.REACT_APP_GOOGLE_API_KEY,
@@ -31,27 +32,7 @@ const formatDate = (dateStr) => {
   return `${parts[2]}.${parts[1]}.${parts[0]}`;
 };
 
-const addEventToGoogleCalendar = async (appointment) => {
-  if (!gapi.client) return false;
-  
-  const event = {
-    summary: `${appointment.patientName} - ${appointment.procedure}`,
-    location: appointment.room,
-    description: `TC: ${appointment.tc}\nProtokol: ${appointment.patientId || '-'}\nNot: ${appointment.notes || ''}\nAnestezi: ${appointment.anesthesia ? 'VAR' : 'Yok'}`,
-    start: { dateTime: `${appointment.date}T09:00:00`, timeZone: 'Europe/Istanbul' }, 
-    end: { dateTime: `${appointment.date}T10:00:00`, timeZone: 'Europe/Istanbul' }
-  };
-
-  try {
-    await gapi.client.calendar.events.insert({ 'calendarId': 'primary', 'resource': event });
-    console.log("✅ Google Takvim senkronizasyonu başarılı.");
-    return true;
-  } catch (error) {
-    console.error("❌ Google Takvim Hatası:", error);
-    return false;
-  }
-};
-
+// Başlangıç Prosedür Listesi
 const initialProcedures = {
   "I. Tanısal Girişimsel Radyoloji": [
     { name: "Diagnostik anjiyografi", duration: 45 },
@@ -194,7 +175,7 @@ export default function App() {
     return saved ? JSON.parse(saved) : defaultSettings;
   });
   
-  // KULLANICI LİSTESİ (Artık State yerine veritabanından gelecek, ama başlangıç state'i lazım)
+  // KULLANICI LİSTESİ
   const [usersList, setUsersList] = useState([]);
 
   const [proceduresData, setProceduresData] = useState(() => {
@@ -227,6 +208,7 @@ export default function App() {
   // GOOGLE CALENDAR INIT
   useEffect(() => {
     const initClient = () => {
+      if(!gapi.client) return;
       gapi.client.init({
         apiKey: CALENDAR_CONFIG.apiKey,
         clientId: CALENDAR_CONFIG.clientId,
@@ -236,7 +218,9 @@ export default function App() {
         setGapiInited(true);
       }, (error) => console.error("GAPI Init Error:", error));
     };
-    gapi.load('client:auth2', initClient);
+    if(typeof gapi !== "undefined") {
+       // gapi.load('client:auth2', initClient); // İsteğe bağlı, backend kullanıldığı için zorunlu değil
+    }
   }, []);
 
   // --- SUPABASE VERİ OKUMA (RANDEVULAR VE KULLANICILAR) ---
@@ -258,16 +242,15 @@ export default function App() {
         if (appsError) throw appsError;
         setAppointments(apps || []);
 
-        // 2. Kullanıcıları Çek (YENİ ÖZELLİK)
+        // 2. Kullanıcıları Çek
         const { data: users, error: usersError } = await supabase
-          .from('app_users') // Supabase'de oluşturduğun tablo adı
+          .from('app_users') 
           .select('*');
         
         if (usersError) {
             console.error("Kullanıcı listesi çekilemedi, varsayılanlar kullanılıyor.", usersError);
             setUsersList(fallbackUsers);
         } else {
-            // Eğer veritabanı boşsa varsayılan kullanıcıyı göster
             setUsersList(users && users.length > 0 ? users : fallbackUsers);
         }
 
@@ -276,13 +259,13 @@ export default function App() {
       } catch (error) {
         console.error("Veri Çekme Hatası:", error);
         setDbStatus("Veritabanı Hatası");
-        setUsersList(fallbackUsers); // Hata durumunda kurtarıcı
+        setUsersList(fallbackUsers);
       }
     };
     
     fetchData();
 
-    // Realtime (Sadece randevular için, kullanıcılar için refresh gerekir)
+    // Realtime
     const channel = supabase
       .channel('realtime appointments')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'appointments' }, () => {
@@ -313,7 +296,6 @@ export default function App() {
   });
 
   const handleLogin = (username, password) => {
-    // Giriş kontrolünü artık veritabanından gelen liste ile yapıyoruz
     const user = usersList.find(u => u.username === username && u.password === password);
     if (user) { 
         setCurrentUser(user); 
@@ -332,7 +314,7 @@ export default function App() {
   };
 
   const googleLogin = async () => {
-    if (gapiInited) {
+    if (gapiInited && gapi.auth2) {
         try {
             const auth = gapi.auth2.getAuthInstance();
             await auth.signIn();
@@ -341,7 +323,7 @@ export default function App() {
             alert("Google giriş hatası (Popup engellendi mi?)");
         }
     } else {
-        alert("Google servisi henüz hazır değil, lütfen sayfayı yenileyin.");
+        alert("Google servisi henüz hazır değil veya backend üzerinden yönetiliyor.");
     }
   };
 
@@ -358,12 +340,11 @@ export default function App() {
   const handleRemoveProcedure = (category, procName) => { if (window.confirm(`${procName} işlemini silmek istediğinize emin misiniz?`)) { setProceduresData(prev => ({ ...prev, [category]: prev[category].filter(p => p.name !== procName) })); } };
   const handleUpdateDuration = (category, procName, newDuration) => { setProceduresData(prev => ({ ...prev, [category]: prev[category].map(p => p.name === procName ? { ...p, duration: parseInt(newDuration) } : p) })); };
   
-  // --- KULLANICI EKLEME (SUPABASE KAYDI) ---
+  // --- KULLANICI EKLEME ---
   const handleAddUser = async (e) => { 
       e.preventDefault(); 
       if(!newUser.name || !newUser.username || !newUser.password) return; 
       
-      // Kullanıcı adı kontrolü
       if(usersList.some(u => u.username === newUser.username)) { alert("Kullanıcı adı kullanımda!"); return; } 
       
       const shortCode = newUser.role === "Anjiyo Hemşiresi" ? "HE" : "TE"; 
@@ -373,7 +354,6 @@ export default function App() {
         try {
             const { data, error } = await supabase.from('app_users').insert([userPayload]).select();
             if (error) throw error;
-            // Başarılıysa listeyi güncelle
             if(data) setUsersList([...usersList, data[0]]);
             alert("Yeni personel veritabanına eklendi.");
         } catch(err) {
@@ -382,14 +362,13 @@ export default function App() {
             return;
         }
       } else {
-         // Local Mod
          setUsersList([...usersList, { id: Date.now(), ...userPayload }]); 
       }
       
       setNewUser({ name: "", username: "", password: "", role: "Radyoloji Teknisyeni" }); 
   };
   
-  // Şifre Güncelleme (Supabase Destekli)
+  // Şifre Güncelleme
   const handleUpdatePassword = async (e) => { 
       e.preventDefault(); 
       if (!newPassword) return; 
@@ -399,11 +378,10 @@ export default function App() {
               const { error } = await supabase
                 .from('app_users')
                 .update({ password: newPassword })
-                .eq('id', currentUser.id); // ID üzerinden güncelleme
+                .eq('id', currentUser.id); 
               if(error) throw error;
           } catch(err) {
               console.error("Şifre Değiştirme Hatası:", err);
-              // Hata olsa bile local state'i güncelle ki kullanıcı takılmasın (Opsiyonel)
           }
       }
 
@@ -417,54 +395,59 @@ export default function App() {
   const handleChecklistChange = (item) => { setNewAppointment(prev => { const exists = prev.checklist.includes(item); return { ...prev, checklist: exists ? prev.checklist.filter(i => i !== item) : [...prev.checklist, item] }; }); };
   const handleToggleAnesthesia = () => setNewAppointment(prev => ({ ...prev, anesthesia: !prev.anesthesia }));
 
-  // --- GÜVENLİ SUBMIT HANDLER ---
+  // --- GÜVENLİ & GÜN BAZLI SUBMIT HANDLER ---
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSyncing(true);
-    let duration = 30;
-    if (newAppointment.procedure) { Object.values(proceduresData).forEach(list => { const found = list.find(p => p.name === newAppointment.procedure); if (found) duration = found.duration; }); }
-    
-    const appointmentData = { 
-        ...newAppointment, 
-        duration, 
-        status: "Bekliyor",
-        created_at: new Date().toISOString()
-    };
-    
-    if(APP_CONFIG.useSupabase) {
-        try { 
-            // 1. ÖNCE SUPABASE'E KAYDET
-            const { error } = await supabase.from('appointments').insert([appointmentData]);
-            if (error) throw error;
 
-            // 2. SONRA GOOGLE TAKVİMİ DENE (Hata verirse işlemi bozma)
-            if (APP_CONFIG.useGoogleCalendar && gapiInited) {
-                try {
-                    const authInstance = gapi.auth2.getAuthInstance();
-                    if (authInstance && authInstance.isSignedIn.get()) {
-                        await addEventToGoogleCalendar(appointmentData);
-                    } else if (authInstance) {
-                         // Otomatik giriş popup'ı açılabilir ama tarayıcı engelleyebilir
-                         console.warn("Google girişi yapılmamış, takvim atlanıyor.");
-                    }
-                } catch (googleError) {
-                    console.error("Google Takvim Hatası (Kayıt devam ediyor):", googleError);
-                }
-            }
+    try {
+      const requestBody = {
+        patientName: newAppointment.patientName,
+        tc: newAppointment.tc,
+        patientId: newAppointment.patientId, 
+        procedure: newAppointment.procedure,
+        room: newAppointment.room || "Genel",
+        date: newAppointment.date, // YYYY-MM-DD
+        notes: newAppointment.notes,
+        anesthesia: newAppointment.anesthesia,
+        checklist: newAppointment.checklist || []
+      };
 
-            setShowModal(false);
-            setNewAppointment({ patientId: "", patientName: "", tc: "", procedure: "", room: rooms[0].name, date: "", notes: "", checklist: [], anesthesia: false });
-            alert("Randevu başarıyla kaydedildi.");
+      console.log("Sunucuya gönderiliyor:", requestBody);
 
-        } catch(err) { 
-            console.error("Supabase Kritik Hata:", err);
-            alert("Veritabanı kayıt hatası: " + err.message);
-        }
-    } else {
-       setAppointments(prev => [...prev, {id: Date.now(), ...appointmentData}]);
-       setShowModal(false);
+      // --- RENDER BACKEND ADRESİ ---
+      const BACKEND_URL = "https://radyoloji-server.onrender.com";
+
+      const response = await fetch(`${BACKEND_URL}/api/randevu-olustur`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        alert("✅ Randevu başarıyla oluşturuldu!\n(Günlük Plan Olarak Eklendi)");
+        
+        setShowModal(false);
+        setNewAppointment({ 
+            patientId: "", patientName: "", tc: "", procedure: "", 
+            room: rooms[0]?.name || "", date: "", notes: "", 
+            checklist: [], anesthesia: false 
+        });
+      } else {
+        console.error("Backend Hatası:", result);
+        alert("❌ Kayıt başarısız: " + (result.error || "Bilinmeyen hata"));
+      }
+
+    } catch (error) {
+      console.error("Fetch Hatası:", error);
+      alert("❌ Sunucu hatası. Backend'e ulaşılamadı.");
+    } finally {
+      setIsSyncing(false);
     }
-    setIsSyncing(false);
   };
 
   // --- SİLME VE GÜNCELLEME İŞLEMLERİ ---
@@ -653,7 +636,7 @@ export default function App() {
                <div className="bg-blue-50 p-6 rounded-xl border border-blue-100 flex justify-between items-center">
                  <div>
                    <h4 className="font-bold text-blue-800 mb-1">Google Takvim Bağlantısı</h4>
-                   <p className="text-sm text-blue-600">Randevuları kişisel takviminizle eşleştirmek için giriş yapın.</p>
+                   <p className="text-sm text-blue-600">Randevular artık sunucu üzerinden otomatik senkronize edilmektedir.</p>
                  </div>
                  <button onClick={googleLogin} className="bg-white text-blue-600 border border-blue-200 px-6 py-2 rounded-lg font-bold hover:bg-blue-100 transition shadow-sm flex items-center gap-2">
                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-4 h-4"/> Google ile Bağlan
